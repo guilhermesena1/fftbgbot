@@ -8,6 +8,8 @@ Created on Fri Dec 27 22:27:32 2024
 #from keras import *
 import json
 import pandas as pd
+import numpy as np
+import os
 
 def get_index(tips, prefix, key):
   if key == "":
@@ -106,10 +108,10 @@ with open("tips.json", "r") as f:
 with open("tournaments/1735334091607.json", "r") as f:
   tournament = json.load(f)
 
+team_matrices = np.zeros((9, 4, len(tips)))
 teams = tournament["Teams"]
 for team in teams:
   the_team = teams[team]["Units"]
-  print(len(the_team))
-  for i in range((len(the_team))):
-    print(the_team[i])
-    print(unit_to_array(the_team[i], tips))
+  team_matrices[team_to_index[team]] = np.array([unit_to_array(the_team[i], tips) for i in range((len(the_team)))])
+
+print(team_matrices)
