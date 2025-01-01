@@ -7,111 +7,65 @@ Created on Fri Dec 27 22:27:32 2024
 
 #from keras import *
 import json
-import pandas as pd
 import numpy as np
 import os
+from apiparse import *
+from model import *
+from tqdm import tqdm
 
-def get_index(tips, prefix, key):
-  if key == "":
-    return 0
-  v = prefix + "_" + key.replace(" ", "_")
-  v = tips[v]
-  return int(v)
+# less verbose tensorflow
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-def fix_job(job):
-  return job.replace(" ", "")
+team_to_index = {"red": 0, "blue": 1, "green": 2, "yellow": 3, "white": 4, "black": 5, "purple": 6, "brown": 7, "champion": 8}
 
-
-def unit_to_array(unit, tips):
-  gender = unit["Gender"]
-  job = fix_job(unit["Class"])
-
-  # hack
-  job = (job if job != "Time Mage" else "TimeMage")
-
-  ans = [0]*len(tips)
-  ans[0] = 1
-  ans[tips["Brave"]] = unit["Brave"]/100.0
-  ans[tips["Faith"]] = unit["Faith"]/100.0
-  job = "Class_" + job + ("" if gender == "Monster" else  "_" + unit["Gender"])
-  ans[tips[job]] = 1
-
-  ans[get_index(tips, "Zodiac", unit["Sign"])] = 1
-
-  # abilities
-  ans[get_index(tips, "Ability", unit["ReactionSkill"])] = 1
-  ans[get_index(tips, "Ability", unit["SupportSkill"])] = 1
-  ans[get_index(tips, "Ability", unit["MoveSkill"])] = 1
-
-  skills = unit['ClassSkills']
-  for i in range(len(skills)):
-    ans[get_index(tips, "Ability", skills[i])] = 1
-  skills = unit['ExtraSkills']
-  for i in range(len(skills)):
-    ans[get_index(tips, "Ability", skills[i])] = 1
-
-  ans[get_index(tips, "Item", unit["Mainhand"])] = 1
-  ans[get_index(tips, "Item", unit["Offhand"])] = 1
-  ans[get_index(tips, "Item", unit["Head"])] = 1
-  ans[get_index(tips, "Item", unit["Armor"])] = 1
-  ans[get_index(tips, "Item", unit["Accessory"])] = 1
-
-  return ans
-
-
-team_to_index = {
-  "red": 0,
-  "blue": 1,
-  "green": 2,
-  "yellow": 3,
-  "white": 4,
-  "black": 5,
-  "purple": 6,
-  "brown": 7,
-  "champion": 8
-}
-
-
-def make_feature_dictionary(tips):
-  BRAVE_INDEX = 1
-  FAITH_INDEX = BRAVE_INDEX + 1
-  ans = {}
-
-  ans[""] = 0
-  ans["Brave"] = BRAVE_INDEX
-  ans["Faith"] = FAITH_INDEX
-
-  ind = FAITH_INDEX + 1
-  classes = tips["Class"]
-  items = tips["Item"]
-  ability = tips["Ability"]
-  zodiac = tips["Zodiac"]
-
-  for zd in zodiac:
-    ans["Zodiac_" + zd.replace(" ", "_")] = ind
-    ind += 1
-  for cl in classes:
-    ans["Class_" + cl.replace(" ", "_")] = ind
-    ind += 1
-  for it in items:
-    ans["Item_" + it.replace(" ", "_")] = ind
-    ind += 1
-  for ab in ability:
-    ans["Ability_" + ab.replace(" ", "_")] = ind
-    ind += 1
-
-  return ans
-
+# parse JSON files
 with open("tips.json", "r") as f:
-  tips = make_feature_dictionary(json.load(f))
+  tips = api_make_feature_dictionary(json.load(f))
+NUM_FEATURES = len(tips)
+X, y = [], []
 
-with open("tournaments/1735334091607.json", "r") as f:
-  tournament = json.load(f)
+tournaments = os.listdir("tournaments")
 
-team_matrices = np.zeros((9, 4, len(tips)))
-teams = tournament["Teams"]
-for team in teams:
-  the_team = teams[team]["Units"]
-  team_matrices[team_to_index[team]] = np.array([unit_to_array(the_team[i], tips) for i in range((len(the_team)))])
+# flatten that puts similar features next to each other
+def prepare_input(x):
+    return x.transpose().flatten()
 
-print(team_matrices)
+model = get_fftbg_model()
+print(model.summary())
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+for i in tqdm(range(len(tournaments))):
+  with open("tournaments/" + tournaments[i], "r") as f:
+    tournament = json.load(f)
+
+  if len(tournament["Winners"]) != 8:
+    continue
+  team_matrices = np.zeros((9, 4*NUM_FEATURES))
+  teams = tournament["Teams"]
+  for team in teams:
+    the_team = teams[team]["Units"]
+    team_matrices[team_to_index[team]] = prepare_input(np.array([api_unit_to_array(the_team[i], tips) for i in range((len(the_team)))]))
+  
+  team_pairs, team_y = api_parse_winners(tournament)
+
+  for i in range(8):
+    X.append(
+      np.vstack((team_matrices[team_pairs[i][0]], team_matrices[team_pairs[i][1]])).
+      transpose().
+      astype('float32')
+    )
+    y.append(team_y[i])
+
+
+X = np.array(X).astype('float32')
+y = np.array(y)
+shuf = np.random.permutation(X.shape[0])
+X = X[shuf]
+y = y[shuf]
+print(X.shape)
+print(y.shape)
+print(y.sum())
+
+# train model
+model.fit(X, y, batch_size = 128, validation_split=0.1, epochs = 20)
+pr = model.predict(X)
